@@ -2,6 +2,7 @@ import asyncio
 import errno
 import fcntl
 import grp
+import logging
 import os
 import pty
 import pwd
@@ -10,6 +11,8 @@ import struct
 import termios
 
 import asyncssh
+
+log = logging.getLogger("sshd")
 
 HOST_KEY_PATH = os.environ.get("SSH_HOST_KEY", "ssh_host_key")
 DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -51,9 +54,20 @@ class Server(asyncssh.SSHServer):
     def connection_made(self, conn):
         self._conn = conn
         self._pw = None
+        peer = conn.get_extra_info("peername")
+        log.info("connection from %s", peer[0] if peer else "?")
+
+    def connection_lost(self, exc):
+        if exc:
+            log.info("connection lost: %s", exc)
 
     def begin_auth(self, username):
         self._pw = lookup_user(username)
+        log.info(
+            "auth (none) user=%r -> %s",
+            username,
+            self._pw.pw_name if self._pw else None,
+        )
         # 認証なしでログインを許可する
         return False
 
@@ -110,6 +124,18 @@ class Session(asyncssh.SSHServerSession):
 
     def session_started(self):
         self._task = asyncio.get_running_loop().create_task(self._run())
+        self._task.add_done_callback(self._task_done)
+
+    def _task_done(self, task):
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error("session failed", exc_info=exc)
+            try:
+                self._chan.exit(1)
+            except Exception:
+                pass
 
     def _environment(self, tty_name):
         pw = self._pw
@@ -198,6 +224,13 @@ class Session(asyncssh.SSHServerSession):
 
         env = self._environment(tty_name)
         executable, argv = self._argv(env)
+        log.info(
+            "exec user=%s pty=%s cwd=%s argv=%s",
+            pw.pw_name,
+            use_pty,
+            cwd,
+            argv,
+        )
         try:
             self._proc = await asyncio.create_subprocess_exec(
                 *argv,
@@ -336,6 +369,10 @@ class Session(asyncssh.SSHServerSession):
 
 
 async def main():
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
     port = int(os.environ["SERVER_PORT"])
     await asyncssh.create_server(
         Server,
