@@ -33,10 +33,10 @@ def lookup_user(username):
     try:
         pw = pwd.getpwnam(username)
     except KeyError:
-        return None
-    # root で動いていなければ、自分以外のユーザにはなれない
-    if os.geteuid() != 0 and pw.pw_uid != os.geteuid():
-        return None
+        pw = None
+    # root で動いていなければ他人にはなれないので、サーバ実行ユーザにフォールバックする
+    if pw is None or (os.geteuid() != 0 and pw.pw_uid != os.geteuid()):
+        pw = pwd.getpwuid(os.geteuid())
     return pw
 
 
