@@ -11,16 +11,7 @@ import termios
 
 import asyncssh
 
-try:
-    import pam
-except ImportError:
-    pam = None
-
 HOST_KEY_PATH = os.environ.get("SSH_HOST_KEY", "ssh_host_key")
-# sshd の AuthorizedKeysFile と同じく %h (ホーム) と %u (ユーザ名) を展開する
-AUTHORIZED_KEYS_FILE = os.environ.get(
-    "AUTHORIZED_KEYS_FILE", ".ssh/authorized_keys"
-)
 DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 SFTP_SERVER_PATHS = [
     "/usr/lib/openssh/sftp-server",
@@ -49,20 +40,11 @@ def lookup_user(username):
     return pw
 
 
-def authorized_keys_path(pw):
-    path = AUTHORIZED_KEYS_FILE.replace("%h", pw.pw_dir).replace("%u", pw.pw_name)
-    return os.path.join(pw.pw_dir, path)
-
-
 def find_sftp_server():
     for path in SFTP_SERVER_PATHS:
         if os.access(path, os.X_OK):
             return path
     return None
-
-
-def pam_service():
-    return "sshd" if os.path.exists("/etc/pam.d/sshd") else "login"
 
 
 class Server(asyncssh.SSHServer):
@@ -72,28 +54,8 @@ class Server(asyncssh.SSHServer):
 
     def begin_auth(self, username):
         self._pw = lookup_user(username)
-        keys = asyncssh.import_authorized_keys("")
-        if self._pw:
-            try:
-                keys = asyncssh.read_authorized_keys(authorized_keys_path(self._pw))
-            except (OSError, ValueError):
-                pass
-        self._conn.set_authorized_keys(keys)
-        return True
-
-    def public_key_auth_supported(self):
-        return True
-
-    def password_auth_supported(self):
-        return pam is not None
-
-    async def validate_password(self, username, password):
-        # PermitRootLogin prohibit-password 相当
-        if self._pw is None or self._pw.pw_uid == 0:
-            return False
-        return await asyncio.to_thread(
-            pam.pam().authenticate, username, password, service=pam_service()
-        )
+        # 認証なしでログインを許可する
+        return False
 
     def session_requested(self):
         return Session()
