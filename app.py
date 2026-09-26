@@ -32,6 +32,18 @@ def load_host_key():
     return key
 
 
+def current_user():
+    uid = os.geteuid()
+    try:
+        return pwd.getpwuid(uid)
+    except KeyError:
+        # コンテナ等で /etc/passwd に載っていない uid のとき擬似エントリを作る
+        name = os.environ.get("USER") or os.environ.get("LOGNAME") or f"uid{uid}"
+        home = os.environ.get("HOME") or "/"
+        shell = os.environ.get("SHELL") or "/bin/sh"
+        return pwd.struct_passwd((name, "x", uid, os.getegid(), "", home, shell))
+
+
 def lookup_user(username):
     try:
         pw = pwd.getpwnam(username)
@@ -39,7 +51,7 @@ def lookup_user(username):
         pw = None
     # root で動いていなければ他人にはなれないので、サーバ実行ユーザにフォールバックする
     if pw is None or (os.geteuid() != 0 and pw.pw_uid != os.geteuid()):
-        pw = pwd.getpwuid(os.geteuid())
+        pw = current_user()
     return pw
 
 
